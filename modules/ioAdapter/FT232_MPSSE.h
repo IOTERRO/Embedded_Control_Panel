@@ -63,6 +63,7 @@
 #include <boost/thread.hpp>
 #include <shared_mutex>
 
+#include "I2C.h"
 #include "libftd2xx/ftd2xx.h"
 
 #include "inout.h"
@@ -71,7 +72,7 @@
 
 namespace IoAdapter
 {
-    class IO_ADAPTER_API FT232_MPSSE final : public io::inOut
+    class IO_ADAPTER_API FT232_MPSSE final : public io::inOut, public I2C::I2CMaster
     {
     public:
         FT232_MPSSE();
@@ -83,19 +84,30 @@ namespace IoAdapter
         FT232_MPSSE& operator=(FT232_MPSSE&&) = delete;
         ~FT232_MPSSE() override;
 
-
+        //IO interface
         bool pinMode(Gpio gpio, const PinMode mode) override;
         bool set(Gpio, GpioState) override;
         bool get(Gpio, GpioState&) override;
 
+        //I2C interface
+        int setSpeed(I2CMaster::Speed speed) override;
+        int readWord(uint8_t addr, uint8_t cmd, uint16_t& value) override;
+        int writeWord(uint8_t addr, uint8_t cmd, uint16_t value) override;
+
     private:
+        enum class DeviceState
+        {
+            Ready,
+            NotReady,
+            Wait
+        };
         void doWork();
         int init();
         int openCahnnel();
-        void closeHandle() const;
+        void closeHandle();
         bool clearAllPins();
-        bool readAllPins(uint8_t cmd, uint8_t& result) const;
-        bool getPinsState(uint16_t& pinsState) const;
+        bool readAllPins(uint8_t cmd, uint8_t& result);
+        bool getPinsState(uint16_t& pinsState);
 
         std::map<Gpio, PinMode> _pinsMode = {
                                                  {Gpio::D0, PinMode::Sf}, {Gpio::D1, PinMode::Sf},
@@ -122,7 +134,7 @@ namespace IoAdapter
         };
 
         uint8_t _dir{};// b0: Input , b1:  Output
-        std::shared_ptr<FT_HANDLE> _handle = std::make_shared<FT_HANDLE>();
+        FT_HANDLE _handle;
 
         boost::thread _thread;
         uint16_t _previousPinsState;

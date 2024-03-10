@@ -95,6 +95,7 @@ enum class MpsseCommand : uint8_t {
 using namespace IoAdapter;
 
 FT232_MPSSE::FT232_MPSSE():
+    _handle(nullptr),
     _thread(boost::thread(&FT232_MPSSE::doWork, this)),
     _previousPinsState(0)
 {
@@ -221,7 +222,7 @@ bool FT232_MPSSE::set(Gpio gpio, const GpioState state)
     gpioCommand[2] = _dir;
 
     unsigned long bytesWritten = 0;
-    const auto status = FT_Write(*_handle, gpioCommand, sizeof(gpioCommand), &bytesWritten);
+    const auto status = FT_Write(_handle, gpioCommand, sizeof(gpioCommand), &bytesWritten);
     if (status != FT_OK) {
         std::cerr << "Failed to write to GPIO (error code: " << status << ")" << std::endl;
         closeHandle();
@@ -267,8 +268,121 @@ bool FT232_MPSSE::get(Gpio gpio, GpioState& state)
     return false;
 }
 
+int FT232_MPSSE::setSpeed(I2CMaster::Speed speed)
+{
+    // I2C channel configuration
+    ChannelConfig channelConf;
+    channelConf.currentPinState = 0; // Current pin status (not used for I2C)
+    channelConf.LatencyTimer = 16;
+    channelConf.Pin = InitialDirection | /* BIT7   -BIT0:   Initial direction of the pins	*/
+        InitialValues << 8 | /* BIT15 -BIT8:   Initial values of the pins		*/
+        FinalDirection << 16 | /* BIT23 -BIT16: Final direction of the pins		*/
+        FinalValues << 24;
+    /* initial dir and values are used for initchannel API and final dir and values are used by CloseChannel API */
 
-bool FT232_MPSSE::getPinsState(uint16_t& pinsState) const
+    channelConf.Options = 0; /* set this option to enable GPIO_Lx pinstate management */
+   
+    switch (speed)
+    {
+    case Speed::_10kbs:
+        return -1;
+    case Speed::_100kbs:
+        channelConf.ClockRate = I2C_CLOCK_STANDARD_MODE;
+        break;
+    case Speed::_200kbs:
+        return -1;
+    case Speed::_400kbs:
+        channelConf.ClockRate = I2C_CLOCK_FAST_MODE;
+        break;
+    case Speed::_1mbs:
+        channelConf.ClockRate = I2C_CLOCK_FAST_MODE_PLUS;
+        break;
+    case Speed::_17mbs:
+        return -1;
+    case Speed::_34mbs:
+        channelConf.ClockRate = I2C_CLOCK_HIGH_SPEED_MODE;
+        break;
+    }
+
+    const auto status = I2C_InitChannel(_handle, &channelConf);
+    if (status != FT_OK)
+    {
+        std::cerr << "Error configuring I2C channel." << std::endl;
+        closeHandle();
+        return -1;
+    }
+
+    return 0;
+}
+
+int FT232_MPSSE::readWord(const uint8_t addr, uint8_t cmd, uint16_t& value)
+{
+    if (_handle == nullptr)
+    {
+        std::cerr << "Need to be initialized before use" << std::endl;
+        return -1;
+    }
+
+    DWORD xfer = 0;
+    FT_STATUS status = I2C_DeviceWrite(_handle, addr, sizeof(cmd), &cmd, &xfer,
+        I2C_TRANSFER_OPTIONS_START_BIT |
+        I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES
+    );
+    if (status != FT_OK || xfer != sizeof(cmd))
+    {
+        closeHandle();
+        return -1;
+    }
+    /* Repeated Start condition generated. */
+    uint8_t data[2] = { 0, 0 };
+    xfer = 0;
+    status = I2C_DeviceRead(_handle, addr, sizeof(data), data, &xfer,
+        I2C_TRANSFER_OPTIONS_START_BIT |
+        I2C_TRANSFER_OPTIONS_STOP_BIT |
+        I2C_TRANSFER_OPTIONS_NACK_LAST_BYTE |
+        I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES
+    );
+    auto i = sizeof(data);
+    if ((status != FT_OK) || (xfer != sizeof(data)))
+    {
+        std::cerr << "FT232_ReadWord : Error(" << status << ")" << std::endl;
+        closeHandle();
+        return -1;
+    }
+    value = static_cast<uint16_t>(data[0]) + static_cast<uint16_t>(data[1] << 8);
+    return 0;
+}
+
+int FT232_MPSSE::writeWord(const uint8_t addr, const uint8_t cmd, const uint16_t value)
+{
+    if (_handle == nullptr)
+    {
+        std::cerr << "Need to be initialized before use" << std::endl;
+        return -1;
+    }
+
+    uint8_t data[3];
+    data[0] = cmd;
+    data[1] = value & 0xFF;
+    data[2] = value >> 8; //  & 0xFF;
+
+
+    DWORD xfer = 0;
+    const FT_STATUS status = I2C_DeviceWrite(_handle, addr, sizeof(data), data, &xfer,
+                                             I2C_TRANSFER_OPTIONS_START_BIT |
+                                             I2C_TRANSFER_OPTIONS_STOP_BIT |
+                                             I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES |
+                                             I2C_TRANSFER_OPTIONS_BREAK_ON_NACK);
+    if (status != FT_OK)
+    {
+        closeHandle();
+        return -1;
+    }
+    return 0;
+}
+
+
+bool FT232_MPSSE::getPinsState(uint16_t& pinsState)
 {
     if (_handle == nullptr)
         return false;
@@ -309,7 +423,7 @@ bool FT232_MPSSE::clearAllPins()
     // 0xF0: GPIO directions for D[7:0] (1 = output, 0 = input)
     uint8_t gpioCommand[] = { 0x80, 0x00, 0xF0 };
     unsigned long bytesWritten = 0;
-    auto status = FT_Write(*_handle, gpioCommand, sizeof(gpioCommand), &bytesWritten);
+    auto status = FT_Write(_handle, gpioCommand, sizeof(gpioCommand), &bytesWritten);
     if (status != FT_OK) {
         std::cerr << "Failed to write to GPIO (error code: " << status << ")" << std::endl;
         closeHandle();
@@ -321,7 +435,7 @@ bool FT232_MPSSE::clearAllPins()
     // 0x00: Output values for C[7:0] (placeholder)
     // 0xFF: GPIO directions for C[7:0] (1 = output)
     uint8_t buffer[3] = { 0x82, 0x00, 0xFF };
-    status = FT_Write(*_handle, buffer, sizeof(buffer), &bytesWritten);
+    status = FT_Write(_handle, buffer, sizeof(buffer), &bytesWritten);
     if (status != FT_OK) {
         std::cerr << "Failed to write to GPIO (error code: " << status << ")" << std::endl;
         closeHandle();
@@ -331,7 +445,7 @@ bool FT232_MPSSE::clearAllPins()
     return true;
 }
 
-bool FT232_MPSSE::readAllPins(uint8_t cmd, uint8_t& result) const
+bool FT232_MPSSE::readAllPins(uint8_t cmd, uint8_t& result)
 {
     // Exclusive lock for write access
     const std::unique_lock<std::shared_mutex> lock(_mutex);
@@ -344,7 +458,7 @@ bool FT232_MPSSE::readAllPins(uint8_t cmd, uint8_t& result) const
     buffer[bytesToTransfer++] = cmd;
     buffer[bytesToTransfer++] = static_cast<uint8_t>(MpsseCommand::SendImmediate);
 
-    FT_STATUS status = FT_Write(*_handle, buffer, bytesToTransfer, &bytesTransfered);
+    FT_STATUS status = FT_Write(_handle, buffer, bytesToTransfer, &bytesTransfered);
     if (status != FT_OK) {
         std::cerr << "Failed to write to GPIO (error code: " << status << ")" << std::endl;
         closeHandle();
@@ -353,7 +467,7 @@ bool FT232_MPSSE::readAllPins(uint8_t cmd, uint8_t& result) const
 
     bytesToTransfer = 1;
     bytesTransfered = 0;
-    status = FT_Read(*_handle, readBuffer, bytesToTransfer, &bytesTransfered);
+    status = FT_Read(_handle, readBuffer, bytesToTransfer, &bytesTransfered);
     if (status != FT_OK) {
         std::cerr << "Failed to read pin D0 state ---> error code(" << status << ")" << std::endl;
         closeHandle();
@@ -374,7 +488,7 @@ int FT232_MPSSE::openCahnnel()
 {
     // Opening the I2C channel
     constexpr DWORD channelIndex = 0; // Index of the I2C channel to open
-    const FT_STATUS status = I2C_OpenChannel(channelIndex, _handle.get());
+    const FT_STATUS status = I2C_OpenChannel(channelIndex, &_handle);
     if (status != FT_OK)
     {
         std::cerr << "Error opening I2C channel." << std::endl;
@@ -383,9 +497,10 @@ int FT232_MPSSE::openCahnnel()
     return 0;
 }
 
-void FT232_MPSSE::closeHandle() const
+void FT232_MPSSE::closeHandle()
 {
-    I2C_CloseChannel(*_handle);
+    I2C_CloseChannel(_handle);
+    _handle = nullptr;
 }
 
 int FT232_MPSSE::init()
@@ -393,68 +508,108 @@ int FT232_MPSSE::init()
     // Initializing the libMPSSE library
     Init_libMPSSE();
 
-    //Open channel
-    openCahnnel();
-
-    // I2C channel configuration
-    ChannelConfig config;
-    config.currentPinState = 0; // Current pin status (not used for I2C)
-    config.LatencyTimer = 1;
-    config.Pin = InitialDirection | /* BIT7   -BIT0:   Initial direction of the pins	*/
-                 InitialValues << 8 | /* BIT15 -BIT8:   Initial values of the pins		*/
-                 FinalDirection << 16 | /* BIT23 -BIT16: Final direction of the pins		*/
-                 FinalValues << 24;
-    /* initial dir and values are used for initchannel API and final dir and values are used by CloseChannel API */
-
-    config.Options = I2C_ENABLE_PIN_STATE_CONFIG; /* set this option to enable GPIO_Lx pinstate management */
-    config.ClockRate = I2C_CLOCK_STANDARD_MODE;
-
-    const auto status = I2C_InitChannel(*_handle, &config);
-    if (status != FT_OK)
+    if (_handle == nullptr)
     {
-        std::cerr << "Error configuring I2C channel." << std::endl;
-        closeHandle();
-        return -1;
+        unsigned long channels = 0;
+        auto status = I2C_GetNumChannels(&channels);
+        std::cout << "		I2C_GetNumChannels returned " << status << "; channels =" << channels;
+
+        for (unsigned long channel = 0; channel < channels; channel++)
+        {
+            FT_DEVICE_LIST_INFO_NODE devList;
+            status = I2C_GetChannelInfo(channel, &devList);
+            std::cout << "		I2C_GetNumChannels returned " << status << " for channel = " << channel;
+            /*print the dev info*/
+            std::cout << "		Flags=0x" << devList.Flags << std::endl;
+            std::cout << "		Type=0x" << devList.Type << std::endl;
+            std::cout << "		ID=0x" << devList.ID << std::endl;
+            std::cout << "		LocId=0x" << devList.LocId << std::endl;
+            std::cout << "		SerialNumber=" << devList.SerialNumber << std::endl;
+            std::cout << "		Description=" << devList.Description << std::endl;
+            std::cout << "		ftHandle=" << devList.ftHandle << " (should be zero)" << std::endl;
+        }
+
+        //Open channel
+        openCahnnel();
+
+        //set speed
+        if (FT_OK != setSpeed(Speed::_400kbs))
+        {
+            closeHandle();
+            return -1;
+        }
+
+        clearAllPins();
     }
-
-    clearAllPins();
-
     return 0;
 }
 
 void FT232_MPSSE::doWork()
 {
     uint16_t pinsState = 0;
+    DeviceState state = _handle !=nullptr ? DeviceState::Ready : DeviceState::Wait;
 
     while (true)
     {
-        Sleep(200);
-        if(_handle != nullptr)
+        switch (state)
         {
-            if (getPinsState(pinsState))
+        case DeviceState::Wait:
             {
-                bool done = false;
-                for (const auto& [pinNumber, pinMode] : _pinsMode)
+                std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+                std::chrono::steady_clock::time_point endTime = startTime + std::chrono::seconds(2);
+                while (_handle == nullptr)
                 {
-                    if (pinMode == PinMode::Input)
+                    if (std::chrono::steady_clock::now() >= endTime) {
+                        state = DeviceState::NotReady;
+                        break; // Break the loop if 2 seconds have passed
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    state = DeviceState::Ready;
+                }
+            }
+            break;
+            case DeviceState::NotReady:
+                {
+                    Sleep(1000);
+                    if(!init())
                     {
-                        if(Bitwise::getBitState(pinsState, static_cast<int>(pinNumber)) != Bitwise::getBitState(_previousPinsState, static_cast<int>(pinNumber)))
+                        state = DeviceState::Ready;
+                    }
+                }
+            break;
+            case DeviceState::Ready:
+            default:
+                {
+                    Sleep(200);
+                    if (_handle != nullptr)
+                    {
+                        if (getPinsState(pinsState))
                         {
-                            _previousPinsState = pinsState;
-                            done = true;
+                            bool done = false;
+                            for (const auto& [pinNumber, pinMode] : _pinsMode)
+                            {
+                                if (pinMode == PinMode::Input)
+                                {
+                                    if (Bitwise::getBitState(pinsState, static_cast<int>(pinNumber)) != Bitwise::getBitState(
+                                        _previousPinsState, static_cast<int>(pinNumber)))
+                                    {
+                                        _previousPinsState = pinsState;
+                                        done = true;
+                                    }
+                                }
+                            }
+                            if (done)
+                            {
+                                valueChanged(pinsState);
+                            }
+                        }
+                        else if(nullptr == _handle)
+                        {
+                            state = DeviceState::NotReady;
                         }
                     }
                 }
-                if(done)
-                {
-                    valueChanged(pinsState);
-                }
-            }
-            else
-            {
-                Sleep(1000);
-                init();
-            }
+                break;
         }
     }
 }
