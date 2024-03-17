@@ -91,12 +91,15 @@
 
 #pragma once
 #include <memory>
+#include <vector>
 
 #include "I2C.h"
 
+#include "export.h"
+
 namespace ioAdapter
 {
-    class PCA9685: public I2C::I2CSlave
+    class IO_ADAPTER_API PCA9685: public I2C::I2CSlave
     {
     public:
         PCA9685(const std::shared_ptr<I2C::I2CMaster>& master,
@@ -109,8 +112,9 @@ namespace ioAdapter
         PCA9685& operator=(PCA9685&&) = delete;
         ~PCA9685() override;
 
+        void setPwmFrequency(unsigned  freq);
+        void firePwm(uint16_t pwmChannel, double dutyCycle, double delayTime = 0);
 
-        void test();
 
     private:
 
@@ -190,7 +194,8 @@ namespace ioAdapter
             ALL_LED_OFF_L = 0xFC,// Load all the LEDn_OFF registers, byte 0
             ALL_LED_OFF_H = 0xFD,// Load all the LEDn_OFF registers, byte 1
             PRE_SCALE = 0xFE,     // Prescaler for output frequency
-            TESTMODE = 0xFF       // Defines the test mode to be entered
+            TESTMODE = 0xFF,       // Defines the test mode to be entered
+            UNDEFINED = -1
         };
 
         enum MODE1
@@ -293,5 +298,9 @@ namespace ioAdapter
         {
             AllCall = 0xE0,// Value to set the ALLCALLADR register (0xE0 or 1110 0000)
         };
+
+
+        std::vector<Register> selectPwmChannel(uint16_t channelNumber);
+
     };
 }

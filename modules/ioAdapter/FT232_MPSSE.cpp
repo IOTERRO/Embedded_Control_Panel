@@ -91,6 +91,7 @@ enum class MpsseCommand : uint8_t {
     SendImmediate	= 0x87
 };
 
+#define I2C_WRITE_COMPLETION_RETRY 10
 
 using namespace IoAdapter;
 
@@ -113,6 +114,7 @@ bool FT232_MPSSE::pinMode(const Gpio gpio, const PinMode mode)
 {
     // Exclusive lock for write access
     const std::unique_lock<std::shared_mutex> lock(_mutex);
+    //const std::lock_guard<std::recursive_mutex> lock(_mutex);
 
     if (_handle == nullptr)
         return false;
@@ -163,9 +165,6 @@ bool FT232_MPSSE::pinMode(const Gpio gpio, const PinMode mode)
  */
 bool FT232_MPSSE::set(Gpio gpio, const GpioState state)
 {
-    // Exclusive lock for write access
-    const std::unique_lock<std::shared_mutex> lock(_mutex);
-
     if (_handle == nullptr)
         return false;
 
@@ -222,8 +221,10 @@ bool FT232_MPSSE::set(Gpio gpio, const GpioState state)
     gpioCommand[2] = _dir;
 
     unsigned long bytesWritten = 0;
-    const auto status = FT_Write(_handle, gpioCommand, sizeof(gpioCommand), &bytesWritten);
-    if (status != FT_OK) {
+
+    const auto status = writeToDevice(gpioCommand, sizeof(gpioCommand), bytesWritten);
+    // auto status = FT_Write(_handle, gpioCommand, sizeof(gpioCommand), &bytesWritten);
+    if (status != true) {
         std::cerr << "Failed to write to GPIO (error code: " << status << ")" << std::endl;
         closeHandle();
         return false;
@@ -235,6 +236,7 @@ bool FT232_MPSSE::set(Gpio gpio, const GpioState state)
 
 bool FT232_MPSSE::get(Gpio gpio, GpioState& state)
 {
+
     if (_handle == nullptr)
         return false;
 
@@ -279,7 +281,7 @@ int FT232_MPSSE::setSpeed(I2CMaster::Speed speed)
         FinalDirection << 16 | /* BIT23 -BIT16: Final direction of the pins		*/
         FinalValues << 24;
     /* initial dir and values are used for initchannel API and final dir and values are used by CloseChannel API */
-
+    //channelConf.Pin = (1 << 0) | (1 << 1); // Set D0 and D1 as I2C pins
     channelConf.Options = 0; /* set this option to enable GPIO_Lx pinstate management */
    
     switch (speed)
@@ -342,7 +344,7 @@ int FT232_MPSSE::readWord(const uint8_t addr, uint8_t cmd, uint16_t& value)
         I2C_TRANSFER_OPTIONS_NACK_LAST_BYTE |
         I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES
     );
-    auto i = sizeof(data);
+
     if ((status != FT_OK) || (xfer != sizeof(data)))
     {
         std::cerr << "FT232_ReadWord : Error(" << status << ")" << std::endl;
@@ -353,43 +355,74 @@ int FT232_MPSSE::readWord(const uint8_t addr, uint8_t cmd, uint16_t& value)
     return 0;
 }
 
-int FT232_MPSSE::writeWord(const uint8_t addr, const uint8_t cmd, const uint16_t value)
+
+int FT232_MPSSE::writeWord(const uint8_t slaveAddress, const uint8_t cmd, const uint16_t value)
 {
+    const std::unique_lock<std::shared_mutex> lock(_mutex);
     if (_handle == nullptr)
     {
         std::cerr << "Need to be initialized before use" << std::endl;
         return -1;
     }
 
-    uint8_t data[3];
-    data[0] = cmd;
-    data[1] = value & 0xFF;
-    data[2] = value >> 8; //  & 0xFF;
+    uint8_t buffer[3];
+    uint32_t bytesTransfered;
+    bool writeComplete = false;
+    uint32_t retry = 0;
+    uint32_t bytesToTransfer = 0;
+    bytesTransfered = 0;
+    buffer[bytesToTransfer++] = cmd; /* Byte addressed inside EEPROM */
+    buffer[bytesToTransfer++] = static_cast<uint8_t>(value);
+    auto status = I2C_DeviceWrite(_handle, slaveAddress, bytesToTransfer, buffer,
+                                  reinterpret_cast<LPDWORD>(&bytesTransfered),
+                                  I2C_TRANSFER_OPTIONS_START_BIT | 
+                                  I2C_TRANSFER_OPTIONS_STOP_BIT |
+                                  I2C_TRANSFER_OPTIONS_NACK_LAST_BYTE |
+                                  I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES);
 
-
-    DWORD xfer = 0;
-    const FT_STATUS status = I2C_DeviceWrite(_handle, addr, sizeof(data), data, &xfer,
-                                             I2C_TRANSFER_OPTIONS_START_BIT |
-                                             I2C_TRANSFER_OPTIONS_STOP_BIT |
-                                             I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES |
-                                             I2C_TRANSFER_OPTIONS_BREAK_ON_NACK);
-    if (status != FT_OK)
+    if ((status != FT_OK) || (bytesTransfered != bytesToTransfer))
     {
+        std::cerr << "FT232_ReadWord : Error(" << status << ")" << std::endl;
         closeHandle();
         return -1;
+    }
+
+    /* poll to check completion */
+    while ((writeComplete == false) && (retry < I2C_WRITE_COMPLETION_RETRY))
+    {
+        bytesToTransfer = 0;
+        bytesTransfered = 0;
+        buffer[bytesToTransfer++] = slaveAddress; /* Addressed inside EEPROM */
+        status = I2C_DeviceWrite(_handle, slaveAddress, bytesToTransfer,
+                                 buffer, reinterpret_cast<LPDWORD>(&bytesTransfered),
+                                 I2C_TRANSFER_OPTIONS_START_BIT | 
+                                 I2C_TRANSFER_OPTIONS_BREAK_ON_NACK |
+                                 I2C_TRANSFER_OPTIONS_NACK_LAST_BYTE |
+                                 I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES);
+        if ((FT_OK == status) && (bytesToTransfer == bytesTransfered))
+        {
+            writeComplete = true;
+        }
+        else
+        {
+            std::cerr << " ... Write Failed" << std::endl;
+            return -1;
+        }
+        retry++;
     }
     return 0;
 }
 
-
 bool FT232_MPSSE::getPinsState(uint16_t& pinsState)
 {
     if (_handle == nullptr)
+    {
+        std::cerr << "Need to be initialized before use" << std::endl;
         return false;
+    }
 
     UCHAR readBufferHigh[10];
     UCHAR readBufferLow[10];
-
 
     if(!readAllPins(static_cast<uint8_t>(MpsseCommand::GetDataBitsHighbyte), *readBufferHigh))
     {
@@ -412,10 +445,29 @@ bool FT232_MPSSE::getPinsState(uint16_t& pinsState)
 
 }
 
+bool FT232_MPSSE::writeToDevice(uint8_t *buffer, DWORD bytesToTransfer, DWORD& bytesTransfered)
+{
+    if (_handle == nullptr)
+    {
+        std::cerr << "Need to be initialized before use" << std::endl;
+        return false;
+    }
+
+    const std::unique_lock<std::shared_mutex> lock(_mutex);
+    if (const auto status = FT_Write(_handle, buffer, bytesToTransfer, &bytesTransfered); status != FT_OK) {
+        return false;
+    }
+    return true;
+}
+
 bool FT232_MPSSE::clearAllPins()
 {
-    // Exclusive lock for write access
-    const std::unique_lock<std::shared_mutex> lock(_mutex);
+
+    if (_handle == nullptr)
+    {
+        std::cerr << "Need to be initialized before use" << std::endl;
+        return false;
+    }
 
     //Clear all D4:D7 pins
     // 0x80: Mpsse Command to set D[7:0].
@@ -447,8 +499,11 @@ bool FT232_MPSSE::clearAllPins()
 
 bool FT232_MPSSE::readAllPins(uint8_t cmd, uint8_t& result)
 {
-    // Exclusive lock for write access
-    const std::unique_lock<std::shared_mutex> lock(_mutex);
+    if (_handle == nullptr)
+    {
+        std::cerr << "Need to be initialized before use" << std::endl;
+        return false;
+    }
 
     uint8_t buffer[2];
     DWORD bytesTransfered = 0;
@@ -458,29 +513,32 @@ bool FT232_MPSSE::readAllPins(uint8_t cmd, uint8_t& result)
     buffer[bytesToTransfer++] = cmd;
     buffer[bytesToTransfer++] = static_cast<uint8_t>(MpsseCommand::SendImmediate);
 
-    FT_STATUS status = FT_Write(_handle, buffer, bytesToTransfer, &bytesTransfered);
-    if (status != FT_OK) {
+    auto status = writeToDevice(buffer, bytesToTransfer, bytesTransfered);
+    if (status != true) {
         std::cerr << "Failed to write to GPIO (error code: " << status << ")" << std::endl;
         closeHandle();
         return false;
     }
-
+  
     bytesToTransfer = 1;
     bytesTransfered = 0;
-    status = FT_Read(_handle, readBuffer, bytesToTransfer, &bytesTransfered);
-    if (status != FT_OK) {
-        std::cerr << "Failed to read pin D0 state ---> error code(" << status << ")" << std::endl;
-        closeHandle();
-        return false;
-    }
-
-    if (bytesToTransfer != bytesTransfered)
     {
-        std::cerr << "bytesToTransfer different then bytesTransfered (" << FT_IO_ERROR << ")" << std::endl;
-        return false;
+        const std::unique_lock<std::shared_mutex> lock(_mutex);
+        status = FT_Read(_handle, readBuffer, bytesToTransfer, &bytesTransfered);
+        if (status != FT_OK) {
+            std::cerr << "Failed to read pin D0 state ---> error code(" << status << ")" << std::endl;
+            closeHandle();
+            return false;
+        }
+        if (bytesToTransfer != bytesTransfered)
+        {
+            std::cerr << "bytesToTransfer different then bytesTransfered (" << FT_IO_ERROR << ")" << std::endl;
+            return false;
+        }
+
+        result = readBuffer[0];
     }
 
-    result = readBuffer[0];
     return true;
 }
 
@@ -505,6 +563,8 @@ void FT232_MPSSE::closeHandle()
 
 int FT232_MPSSE::init()
 {
+    const std::unique_lock<std::shared_mutex> lock(_mutex);
+
     // Initializing the libMPSSE library
     Init_libMPSSE();
 
@@ -578,7 +638,6 @@ void FT232_MPSSE::doWork()
                 }
             break;
             case DeviceState::Ready:
-            default:
                 {
                     Sleep(200);
                     if (_handle != nullptr)

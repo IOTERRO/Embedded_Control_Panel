@@ -21,3 +21,8 @@ std::shared_ptr<ioAdapter::ioHandler> Factory::getIoHandler(const std::shared_pt
 {
     return std::make_shared<ioAdapter::ioHandler>(device);
 }
+
+std::shared_ptr<ioAdapter::PCA9685> Factory::getPwmDriver(const std::shared_ptr<I2C::I2CMaster>& device)
+{
+    return std::make_shared<ioAdapter::PCA9685>(device);
+}

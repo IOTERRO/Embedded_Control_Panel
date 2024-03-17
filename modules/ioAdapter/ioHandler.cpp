@@ -7,7 +7,10 @@ using namespace ioAdapter;
 ioHandler::ioHandler(std::shared_ptr<inOut> device) :
     _device(std::move(device))
 {
-    _device->valueChanged.connect([&](auto state) { valueChanged(state); });
+    _device->valueChanged.connect([&](auto state)
+    {
+        valueChanged(state);
+    });
 }
 
 ioHandler::~ioHandler()

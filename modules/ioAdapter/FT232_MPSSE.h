@@ -108,6 +108,7 @@ namespace IoAdapter
         bool clearAllPins();
         bool readAllPins(uint8_t cmd, uint8_t& result);
         bool getPinsState(uint16_t& pinsState);
+        bool writeToDevice(uint8_t *buffer, DWORD bytesToTransfer, DWORD& bytesTransfered);
 
         std::map<Gpio, PinMode> _pinsMode = {
                                                  {Gpio::D0, PinMode::Sf}, {Gpio::D1, PinMode::Sf},
@@ -139,6 +140,5 @@ namespace IoAdapter
         boost::thread _thread;
         uint16_t _previousPinsState;
         mutable std::shared_mutex _mutex;
-
     };
 }

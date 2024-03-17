@@ -4,6 +4,7 @@
 #include "export.h"
 
 #include "FT232_MPSSE.h"
+#include "PCA9685.h"
 #include "ioHandler.h"
 
 class  FACTORY_API Factory final
@@ -22,8 +23,6 @@ class  FACTORY_API Factory final
 
         static std::shared_ptr<ioAdapter::ioHandler> getIoHandler(const std::shared_ptr<io::inOut>& device);
 
-    private:
-        
-
+        static std::shared_ptr<ioAdapter::PCA9685> getPwmDriver(const std::shared_ptr<I2C::I2CMaster>& device);
    };
 
