@@ -103,7 +103,7 @@ namespace IoAdapter
         };
         void doWork();
         int init();
-        int openCahnnel();
+        int openCahnnel(const DWORD channelIndex);
         void closeHandle();
         bool clearAllPins();
         bool readAllPins(uint8_t cmd, uint8_t& result);

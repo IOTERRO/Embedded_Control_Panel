@@ -39,7 +39,7 @@ void  PCA9685::firePwm(const uint16_t pwmChannel, const double dutyCycle, const 
     constexpr int period = 4096;  // Total period
 
     // Calculate Thigh (high time) for the desired duty cycle
-    const int Thigh = static_cast<int>(period * dutyCycle/100);
+    const int Thigh = static_cast<int>(round(period * dutyCycle / 100));
 
     // Calculate delay count
     const int delayCount =static_cast<int>(delayTime) * period;

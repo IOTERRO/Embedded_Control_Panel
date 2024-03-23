@@ -276,12 +276,13 @@ int FT232_MPSSE::setSpeed(I2CMaster::Speed speed)
     ChannelConfig channelConf;
     channelConf.currentPinState = 0; // Current pin status (not used for I2C)
     channelConf.LatencyTimer = 16;
-    channelConf.Pin = InitialDirection | /* BIT7   -BIT0:   Initial direction of the pins	*/
-        InitialValues << 8 | /* BIT15 -BIT8:   Initial values of the pins		*/
-        FinalDirection << 16 | /* BIT23 -BIT16: Final direction of the pins		*/
-        FinalValues << 24;
+    //channelConf.Pin = InitialDirection | /* BIT7   -BIT0:   Initial direction of the pins	*/
+    //    InitialValues << 8 | /* BIT15 -BIT8:   Initial values of the pins		*/
+    //    FinalDirection << 16 | /* BIT23 -BIT16: Final direction of the pins		*/
+    //    FinalValues << 24;
     /* initial dir and values are used for initchannel API and final dir and values are used by CloseChannel API */
     //channelConf.Pin = (1 << 0) | (1 << 1); // Set D0 and D1 as I2C pins
+    channelConf.Pin = 0;
     channelConf.Options = 0; /* set this option to enable GPIO_Lx pinstate management */
    
     switch (speed)
@@ -376,9 +377,7 @@ int FT232_MPSSE::writeWord(const uint8_t slaveAddress, const uint8_t cmd, const 
     auto status = I2C_DeviceWrite(_handle, slaveAddress, bytesToTransfer, buffer,
                                   reinterpret_cast<LPDWORD>(&bytesTransfered),
                                   I2C_TRANSFER_OPTIONS_START_BIT | 
-                                  I2C_TRANSFER_OPTIONS_STOP_BIT |
-                                  I2C_TRANSFER_OPTIONS_NACK_LAST_BYTE |
-                                  I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES);
+                                  I2C_TRANSFER_OPTIONS_STOP_BIT);
 
     if ((status != FT_OK) || (bytesTransfered != bytesToTransfer))
     {
@@ -387,29 +386,27 @@ int FT232_MPSSE::writeWord(const uint8_t slaveAddress, const uint8_t cmd, const 
         return -1;
     }
 
-    /* poll to check completion */
-    while ((writeComplete == false) && (retry < I2C_WRITE_COMPLETION_RETRY))
-    {
-        bytesToTransfer = 0;
-        bytesTransfered = 0;
-        buffer[bytesToTransfer++] = slaveAddress; /* Addressed inside EEPROM */
-        status = I2C_DeviceWrite(_handle, slaveAddress, bytesToTransfer,
-                                 buffer, reinterpret_cast<LPDWORD>(&bytesTransfered),
-                                 I2C_TRANSFER_OPTIONS_START_BIT | 
-                                 I2C_TRANSFER_OPTIONS_BREAK_ON_NACK |
-                                 I2C_TRANSFER_OPTIONS_NACK_LAST_BYTE |
-                                 I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES);
-        if ((FT_OK == status) && (bytesToTransfer == bytesTransfered))
-        {
-            writeComplete = true;
-        }
-        else
-        {
-            std::cerr << " ... Write Failed" << std::endl;
-            return -1;
-        }
-        retry++;
-    }
+    ///* poll to check completion */
+    //while ((writeComplete == false) && (retry < I2C_WRITE_COMPLETION_RETRY))
+    //{
+    //    bytesToTransfer = 0;
+    //    bytesTransfered = 0;
+    //    buffer[bytesToTransfer++] = slaveAddress; /* Addressed inside EEPROM */
+    //    status = I2C_DeviceWrite(_handle, slaveAddress, bytesToTransfer,
+    //                             buffer, reinterpret_cast<LPDWORD>(&bytesTransfered),
+    //                             I2C_TRANSFER_OPTIONS_START_BIT | 
+    //                             I2C_TRANSFER_OPTIONS_FAST_TRANSFER_BYTES);
+    //    if ((FT_OK == status) && (bytesToTransfer == bytesTransfered))
+    //    {
+    //        writeComplete = true;
+    //    }
+    //    else
+    //    {
+    //        std::cerr << " ... Write Failed" << std::endl;
+    //        return -1;
+    //    }
+    //    retry++;
+    //}
     return 0;
 }
 
@@ -542,16 +539,16 @@ bool FT232_MPSSE::readAllPins(uint8_t cmd, uint8_t& result)
     return true;
 }
 
-int FT232_MPSSE::openCahnnel()
+int FT232_MPSSE::openCahnnel(const DWORD channelIndex)
 {
     // Opening the I2C channel
-    constexpr DWORD channelIndex = 0; // Index of the I2C channel to open
     const FT_STATUS status = I2C_OpenChannel(channelIndex, &_handle);
     if (status != FT_OK)
     {
         std::cerr << "Error opening I2C channel." << std::endl;
         return -1;
     }
+    
     return 0;
 }
 
@@ -567,33 +564,41 @@ int FT232_MPSSE::init()
 
     // Initializing the libMPSSE library
     Init_libMPSSE();
-
+   
     if (_handle == nullptr)
     {
         unsigned long channels = 0;
         auto status = I2C_GetNumChannels(&channels);
-        std::cout << "		I2C_GetNumChannels returned " << status << "; channels =" << channels;
 
+        const DWORD channelIndex = 0;
         for (unsigned long channel = 0; channel < channels; channel++)
         {
             FT_DEVICE_LIST_INFO_NODE devList;
             status = I2C_GetChannelInfo(channel, &devList);
-            std::cout << "		I2C_GetNumChannels returned " << status << " for channel = " << channel;
+            Sleep(1);
+            std::cout << "\t\t\t\t\t\tI2C_GetNumChannels returned " << status << " for channel = " << channel << std::endl;
             /*print the dev info*/
-            std::cout << "		Flags=0x" << devList.Flags << std::endl;
-            std::cout << "		Type=0x" << devList.Type << std::endl;
-            std::cout << "		ID=0x" << devList.ID << std::endl;
-            std::cout << "		LocId=0x" << devList.LocId << std::endl;
-            std::cout << "		SerialNumber=" << devList.SerialNumber << std::endl;
-            std::cout << "		Description=" << devList.Description << std::endl;
-            std::cout << "		ftHandle=" << devList.ftHandle << " (should be zero)" << std::endl;
+            std::cout << "\t\t\t\t\t\tFlags=0x" << devList.Flags << std::endl;
+            std::cout << "\t\t\t\t\t\tType=0x" << devList.Type << std::endl;
+            std::cout << "\t\t\t\t\t\tID=0x" << devList.ID << std::endl;
+            std::cout << "\t\t\t\t\t\tLocId=0x" << devList.LocId << std::endl;
+            std::cout << "\t\t\t\t\t\tSerialNumber=" << devList.SerialNumber << std::endl;
+            std::cout << "\t\t\t\t\t\tDescription=" << devList.Description << std::endl;
+            std::cout << "\t\t\t\t\t\tftHandle=" << devList.ftHandle << " (should be zero)" << std::endl;
         }
 
+        Sleep(10);
+
         //Open channel
-        openCahnnel();
+        if(-1 == openCahnnel(channelIndex))
+        {
+            return -1;
+        }
+
+        Sleep(100);
 
         //set speed
-        if (FT_OK != setSpeed(Speed::_400kbs))
+        if (-1 == setSpeed(Speed::_100kbs))
         {
             closeHandle();
             return -1;
@@ -624,8 +629,9 @@ void FT232_MPSSE::doWork()
                         break; // Break the loop if 2 seconds have passed
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    state = DeviceState::Ready;
                 }
+                state = DeviceState::Ready;
+                std::cout << "\t\t\t\t\t\t(-- I am Ready --)" << std::endl;
             }
             break;
             case DeviceState::NotReady:
@@ -633,6 +639,7 @@ void FT232_MPSSE::doWork()
                     Sleep(1000);
                     if(!init())
                     {
+                        std::cout << "\t\t\t\t\t\t(-- I am Ready --)" << std::endl;
                         state = DeviceState::Ready;
                     }
                 }

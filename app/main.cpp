@@ -18,7 +18,7 @@ static bool IsFlashButton = false;
 static int FlashTime = 500 * 6;
 
 auto inputPin = inOut::Gpio::C1;
-auto outputPin = inOut::Gpio::D7;
+auto outputPin = inOut::Gpio::C0;
 
 void callback(const uint16_t state)
 {
@@ -39,20 +39,47 @@ void pwmOperation()
 {
     while (true)
     {
-        //pwmDriver->test(); // Execute PWM operation
-        pwmDriver->firePwm(0, 20, 0);//generate pwm on channel 0 ( dutyCycle = 88%)
-        pwmDriver->firePwm(1, 20, 0);//generate pwm on channel 1 ( dutyCycle = 13%)
-        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+      /* for (int i = 300; i <= 1200; i += 13) {
+            const double value = static_cast<double>(i) / 100.0;
+            std::cout <<"i: " << i << "(Duty Cycle: " << value << "%)" << std::endl;
+            pwmDriver->firePwm(0, value);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }*/
+        pwmDriver->firePwm(0, 12);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        /*for (int i = 123; i >= 30; i -= 1) {
+            const double value = static_cast<double>(i) / 10.0;
+            std::cout << "i: " << i << "(Duty Cycle: " << value << "%)" << std::endl;
+            pwmDriver->firePwm(0, value);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        }*/
+
     }
 }
+
+/*
+__________________________
+              |
+Duty Cycle(%) |  Angle(°)
+______________|___________
+              |
+      10      |   90
+______________|___________
+              |
+      8       |   0
+______________|___________
+              |   
+      5       |   -90
+______________|___________
+ 
+*/
 
 void setupPwm()
 {
     if(pwmDriver != nullptr)
     {
-        pwmDriver->setPwmFrequency(50);
-        pwmDriver->firePwm(0, 88, 0);//generate pwm on channel 0 ( dutyCycle = 88%)
-        pwmDriver->firePwm(1, 13, 0);//generate pwm on channel 1 ( dutyCycle = 13%)
+        pwmDriver->setPwmFrequency(48);
     }
 }
 
@@ -76,12 +103,12 @@ int main()
     {
         if(IoHandler->set(outputPin, inOut::GpioState::High))
         {
-            std::cout << "State: C0 High" << std::endl;
+            //std::cout << "State: C0 High" << std::endl;
         }
         Sleep(1000);
         if(IoHandler->set(outputPin, inOut::GpioState::Low))
         {
-            std::cout << "State: C0 Low" << std::endl;
+           //std::cout << "State: C0 Low" << std::endl;
         }
         Sleep(1000);
     }
